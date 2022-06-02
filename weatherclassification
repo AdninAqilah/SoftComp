@@ -1,8 +1,12 @@
 % uncompress the datasets
 unzip('wdsets.zip');
+unzip('nwdsets.zip');
 
 % store in imageDatasotre
 imds = imageDatastore('wdsets', ...
+   'IncludeSubfolders',true, ...
+   'LabelSource','foldernames');
+imds2 = imageDatastore('nwdsets', ...
    'IncludeSubfolders',true, ...
    'LabelSource','foldernames');
    
@@ -10,18 +14,24 @@ imds = imageDatastore('wdsets', ...
 rainy = find(imds.Labels == 'rainy', 1);
 figure
 imshow(readimage(imds,rainy))
+rainbow = find(imds2.Labels == 'rainbow', 1);
+figure
+imshow(readimage(imds2,rainbow))
 
 % summarize the number of images per category
 tbl = countEachLabel(imds)
+tbl2 = countEachLabel(imds2)
 
 % Limit the number of images
 maxNumImages = 100;
 
 % Trim the set
 imds = splitEachLabel(imds, maxNumImages, 'randomize');
+imds2 = splitEachLabel(imds2, maxNumImages, 'randomize');
 
 % summarize the trimmed number of images per category
 countEachLabel(imds)
+countEachLabel(imds2)
 
 % Load pretrained network
 net = resnet50();
@@ -43,11 +53,14 @@ numel(net.Layers(end).ClassNames)
 
 % Split the sets into training and validation data
 [trainingSet, testSet] = splitEachLabel(imds, 0.3, 'randomize');
+[trainingSet2, testSet2] = splitEachLabel(imds2, 0.3, 'randomize');
 
 % Resize images
 imageSize = net.Layers(1).InputSize;
 augmentedTrainingSet = augmentedImageDatastore(imageSize, trainingSet, 'ColorPreprocessing', 'gray2rgb');
 augmentedTestSet = augmentedImageDatastore(imageSize, testSet, 'ColorPreprocessing', 'gray2rgb');
+augmentedTrainingSet2 = augmentedImageDatastore(imageSize, trainingSet2, 'ColorPreprocessing', 'gray2rgb');
+augmentedTestSet2 = augmentedImageDatastore(imageSize, testSet2, 'ColorPreprocessing', 'gray2rgb');
 
 % Get the network weights for the second convolutional layer
 w1 = net.Layers(2).Weights;
@@ -63,28 +76,60 @@ title('First convolutional layer weights')
 featureLayer = 'fc1000';
 trainingFeatures = activations(net, augmentedTrainingSet, featureLayer, ...
    'MiniBatchSize', 32, 'OutputAs', 'columns');
+trainingFeatures2 = activations(net, augmentedTrainingSet2, featureLayer, ...
+   'MiniBatchSize', 32, 'OutputAs', 'columns');
    
 % Get training labels from the trainingSet
 trainingLabels = trainingSet.Labels;
+trainingLabels2 = trainingSet2.Labels;
 
 % Train multiclass SVM classifier using a fast linear solver
 classifier = fitcecoc(trainingFeatures, trainingLabels, ...
+   'Learners', 'Linear', 'Coding', 'onevsall', 'ObservationsIn', 'columns');
+classifier2 = fitcecoc(trainingFeatures2, trainingLabels2, ...
    'Learners', 'Linear', 'Coding', 'onevsall', 'ObservationsIn', 'columns');
    
 % Extract test features using the CNN
 testFeatures = activations(net, augmentedTestSet, featureLayer, ...
    'MiniBatchSize', 32, 'OutputAs', 'columns');
+testFeatures2 = activations(net, augmentedTestSet2, featureLayer, ...
+   'MiniBatchSize', 32, 'OutputAs', 'columns');
    
 % Pass CNN image features to trained classifier
 predictedLabels = predict(classifier, testFeatures, 'ObservationsIn', 'columns');
+predictedLabels2 = predict(classifier2, testFeatures2, 'ObservationsIn', 'columns');
+
+% Get the known labels
 testLabels = testSet.Labels;
+testLabels2 = testSet2.Labels;
+
+% Tabulate the results using a confusion matrix
 confMat = confusionmat(testLabels, predictedLabels);
+confMat2 = confusionmat(testLabels2, predictedLabels2);
+
+% Convert confusion matrix into percentage form
 confMat = bsxfun(@rdivide,confMat,sum(confMat,2))
+confMat2 = bsxfun(@rdivide,confMat2,sum(confMat2,2))
+
+% Display the mean accuracy
 mean(diag(confMat))
+mean(diag(confMat2))
+
+% Get a test image input
 [n, d] = uigetfile();
 f = fullfile(d,n); 
 testImage = imread(f);
 b = dec2bin(p,8) - '0';
+
+% Create augmentedImageDatastore to automatically resize the image when
+% image features are extracted using activations
 ds = augmentedImageDatastore(imageSize, testImage, 'ColorPreprocessing', 'gray2rgb');
+ds2 = augmentedImageDatastore(imageSize, testImage, 'ColorPreprocessing', 'gray2rgb');
+
+% Extract image features using the CNN
 imageFeatures = activations(net, ds, featureLayer, 'OutputAs', 'columns');
+imageFeatures2 = activations(net, ds2, featureLayer, 'OutputAs', 'columns');
+
+% Make a prediction using the classifiers
 predictedLabel = predict(classifier, imageFeatures, 'ObservationsIn', 'columns')
+predictedLabel2 = predict(classifier2, imageFeatures2, 'ObservationsIn', 'columns')
